@@ -11,6 +11,30 @@ struct ParticleSwarm {
 }
 
 impl ParticleSwarm {
+    fn new(n: usize, x: Vec<f64>, v: Vec<f64>, f: fn(f64) -> f64, opt: &OptimizationPolicy) -> Self {
+        assert!(x.len() == n, "Position vector must have length equal to number of particles");
+        assert!(v.len() == n, "Velocity vector must have length equal to number of particles");
+
+        let mut local_optimum = Vec::new();
+        for i in 0..n {
+            local_optimum.push(x[i]);
+        }
+
+        let global_optimum = local_optimum
+            .iter()
+            .max_by(|&x, &y| match opt {
+                OptimizationPolicy::FindMinimum => f(*x).partial_cmp(&f(*y)).unwrap(),
+                OptimizationPolicy::FindMaximum => f(*y).partial_cmp(&f(*x)).unwrap(),
+            })
+            .unwrap();
+
+        Self {
+            position: x,
+            velocity: v,
+            global_optimum: Some(*global_optimum),
+            local_optimum,
+        }
+    }
     fn new_random<R: rand::Rng>(
         n: usize,
         f: fn(f64) -> f64,
@@ -124,7 +148,7 @@ fn update<R: rand::Rng>(
 
 fn usage(program: &str) {
     println!(
-        "Usage: {} -n <n> (-e <e>|-i <i>) [-v] [--no-random]",
+        "Usage: {} -n <n> (-e <e>|-i <i>) [-v] [--seed <seed>] [--init <x1,x2,...,xn>] [--vinit <v1,v2,...,vn>]",
         program
     );
     println!("\t-n: Number of particles\t(required)");
@@ -132,6 +156,8 @@ fn usage(program: &str) {
     println!("\t-i: Number of iterations\t(uses error threshold if not provided)");
     println!("\t-v: Verbose mode\t(default:false)");
     println!("\t--seed: Use a fixed seed for random number generation");
+    println!("\t--init: Initial positions of particles");
+    println!("\t--vinit: Initial velocities of particles");
 }
 
 enum ParseError {
@@ -148,6 +174,8 @@ struct RunOptions {
     iter: Option<usize>,
     thresh: f64,
     verbose: bool,
+    init: Option<Vec<f64>>,
+    vinit: Option<Vec<f64>>,
     r: Option<rand::rngs::StdRng>,
 }
 
@@ -157,6 +185,9 @@ fn parse(args: &Vec<String>) -> Result<RunOptions, ParseError> {
     let mut verbose = false;
     let mut thresh = 0.0001;
     let mut r = None;
+
+    let mut init = None;
+    let mut vinit = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -207,6 +238,36 @@ fn parse(args: &Vec<String>) -> Result<RunOptions, ParseError> {
                 r = Some(rand::SeedableRng::seed_from_u64(seed));
                 i += 2;
             }
+            "--init" => {
+                if i + 1 >= args.len() {
+                    return Err(ParseError::MissingArgument("--init".to_string()));
+                }
+                init = Some(
+                    args[i + 1]
+                        .split(",")
+                        .map(|x| {
+                            x.parse::<f64>()
+                                .map_err(|_| ParseError::InvalidArgument(x.to_string()))
+                        })
+                        .collect::<Result<Vec<f64>, ParseError>>()?,
+                );
+                i += 2;
+            }
+            "--vinit" => {
+                if i + 1 >= args.len() {
+                    return Err(ParseError::MissingArgument("--vinit".to_string()));
+                }
+                vinit = Some(
+                    args[i + 1]
+                        .split(",")
+                        .map(|x| {
+                            x.parse::<f64>()
+                                .map_err(|_| ParseError::InvalidArgument(x.to_string()))
+                        })
+                        .collect::<Result<Vec<f64>, ParseError>>()?,
+                );
+                i += 2;
+            }
             _ => {
                 return Err(ParseError::InvalidArgument(args[i].clone()));
             }
@@ -218,6 +279,8 @@ fn parse(args: &Vec<String>) -> Result<RunOptions, ParseError> {
         iter,
         thresh,
         verbose,
+        init,
+        vinit,
         r,
     })
 }
@@ -276,7 +339,13 @@ fn main() {
     let f = |x: f64| (x - 1.0) * (x - 1.0);
     let opt = OptimizationPolicy::FindMinimum;
     let consts = UpdatePolicy::new(0.5, 0.5);
-    let mut swarm = ParticleSwarm::new_random(n, f, &opt, &mut r);
+    let mut swarm = match run_opts.init {
+        Some(x) => match run_opts.vinit {
+            Some(v) => ParticleSwarm::new(n, x, v, f, &opt),
+            None => ParticleSwarm::new(n, x, vec![0.0; n], f, &opt),
+        },
+        None => ParticleSwarm::new_random(n, f, &opt, &mut r),
+    };
 
     println!("\nInitialized {} particles:", n);
     if verbose {
