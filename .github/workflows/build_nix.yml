@@ -9,5 +9,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: cachix/install-nix-action@v26
-      - name: Building package
-        run: nix build 
+      - name: Building PSO
+        working-directory: ./pso
+        run: nix build
