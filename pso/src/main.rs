@@ -1,4 +1,6 @@
+use colored::Colorize;
 use rand;
+use std::fmt;
 
 #[derive(Debug)]
 struct ParticleSwarm {
@@ -9,23 +11,19 @@ struct ParticleSwarm {
 }
 
 impl ParticleSwarm {
-    fn new(position: Vec<f64>, velocity: Vec<f64>) -> Self {
-        Self {
-            local_optimum: position.clone(),
-            position,
-            velocity,
-            global_optimum: None,
-        }
-    }
-
-    fn new_random(n: usize, f: fn(f64) -> f64, opt: &OptimizationPolicy) -> Self {
+    fn new_random<R: rand::Rng>(
+        n: usize,
+        f: fn(f64) -> f64,
+        opt: &OptimizationPolicy,
+        r: &mut R,
+    ) -> Self {
         let mut position = Vec::new();
         let mut velocity = Vec::new();
         let mut local_optimum = Vec::new();
 
         for _ in 0..n {
-            let x = rand::random::<f64>();
-            let v = rand::random::<f64>();
+            let x: f64 = r.gen();
+            let v: f64 = r.gen();
             position.push(x);
             velocity.push(v);
             local_optimum.push(x);
@@ -48,6 +46,17 @@ impl ParticleSwarm {
     }
 }
 
+impl fmt::Display for ParticleSwarm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+"Positions: {:?}
+Velocities: {:?}",
+            self.position, self.velocity
+        )
+    }
+}
+
 struct UpdatePolicy {
     c1: f64,
     c2: f64,
@@ -64,11 +73,12 @@ enum OptimizationPolicy {
     FindMaximum,
 }
 
-fn update(
+fn update<R: rand::Rng>(
     swarm: &mut ParticleSwarm,
     consts: &UpdatePolicy,
     f: fn(f64) -> f64,
     opt: &OptimizationPolicy,
+    r: &mut R,
 ) {
     // Update the particle's position
     for i in 0..swarm.position.len() {
@@ -104,8 +114,8 @@ fn update(
 
     // Update the particle's velocity
     for i in 0..swarm.velocity.len() {
-        let r1 = rand::random::<f64>();
-        let r2 = rand::random::<f64>();
+        let r1 = r.gen::<f64>();
+        let r2 = r.gen::<f64>();
         swarm.velocity[i] = swarm.velocity[i]
             + consts.c1 * r1 * (swarm.local_optimum[i] - swarm.position[i])
             + consts.c2 * r2 * (swarm.global_optimum.unwrap() - swarm.position[i]);
@@ -113,19 +123,152 @@ fn update(
 }
 
 fn usage(program: &str) {
-    println!("Usage: {} <n> <i>", program);
-    println!("\tn: Number of particles");
-    println!("\ti: Number of iterations");
+    println!(
+        "Usage: {} -n <n> (-e <e>|-i <i>) [-v] [--no-random]",
+        program
+    );
+    println!("\t-n: Number of particles\t(required)");
+    println!("\t-e: Error threshold\t(default:0.0001)");
+    println!("\t-i: Number of iterations\t(uses error threshold if not provided)");
+    println!("\t-v: Verbose mode\t(default:false)");
+    println!("\t--seed: Use a fixed seed for random number generation");
+}
+
+enum ParseError {
+    MissingArgument(String),
+    InvalidParticleNumber(String),
+    InvalidIterations(String),
+    InvalidThreshold(String),
+    InvalidSeed(String),
+    InvalidArgument(String),
+}
+
+struct RunOptions {
+    n: usize,
+    iter: Option<usize>,
+    thresh: f64,
+    verbose: bool,
+    r: Option<rand::rngs::StdRng>,
+}
+
+fn parse(args: &Vec<String>) -> Result<RunOptions, ParseError> {
+    let mut n = None;
+    let mut iter = None;
+    let mut verbose = false;
+    let mut thresh = 0.0001;
+    let mut r = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-n" => {
+                if i + 1 >= args.len() {
+                    return Err(ParseError::MissingArgument("-n".to_string()));
+                }
+                n = Some(
+                    args[i + 1]
+                        .parse::<usize>()
+                        .map_err(|_| ParseError::InvalidParticleNumber(args[i + 1].clone()))?,
+                );
+                i += 2;
+            }
+            "-i" => {
+                if i + 1 >= args.len() {
+                    return Err(ParseError::MissingArgument("-i".to_string()));
+                }
+                iter = Some(
+                    args[i + 1]
+                        .parse::<usize>()
+                        .map_err(|_| ParseError::InvalidIterations(args[i + 1].clone()))?,
+                );
+                i += 2;
+            }
+            "-e" => {
+                if i + 1 >= args.len() {
+                    return Err(ParseError::MissingArgument("-e".to_string()));
+                }
+                thresh = args[i + 1]
+                    .parse::<f64>()
+                    .map_err(|_| ParseError::InvalidThreshold(args[i + 1].clone()))?;
+                i += 2;
+            }
+            "-v" => {
+                verbose = true;
+                i += 1;
+            }
+            "--seed" => {
+                if i + 1 >= args.len() {
+                    return Err(ParseError::MissingArgument("--seed".to_string()));
+                }
+                let seed = args[i + 1]
+                    .parse::<u64>()
+                    .map_err(|_| ParseError::InvalidSeed(args[i + 1].clone()))?;
+                println!("Using seed {}", seed);
+                r = Some(rand::SeedableRng::seed_from_u64(seed));
+                i += 2;
+            }
+            _ => {
+                return Err(ParseError::InvalidArgument(args[i].clone()));
+            }
+        }
+    }
+
+    Ok(RunOptions {
+        n: n.ok_or(ParseError::MissingArgument("-n".to_string()))?,
+        iter,
+        thresh,
+        verbose,
+        r,
+    })
 }
 
 fn main() {
     let args = std::env::args().collect::<Vec<String>>();
-    if args.len() != 3 {
-        usage(&args[0]);
-        return;
-    }
-    let n = args[1].parse::<usize>().unwrap();
-    let iter = args[2].parse::<usize>().unwrap();
+    let run_opts = match parse(&args) {
+        Ok(opts) => opts,
+        Err(ParseError::MissingArgument(arg)) => {
+            eprintln!("Missing argument for {}", arg.red());
+            usage(&args[0]);
+            std::process::exit(1);
+        }
+        Err(ParseError::InvalidParticleNumber(arg)) => {
+            eprintln!("Invalid number of particles: {}", arg.red());
+            usage(&args[0]);
+            std::process::exit(1);
+        }
+        Err(ParseError::InvalidIterations(arg)) => {
+            eprintln!("Invalid number of iterations: {}", arg.red());
+            usage(&args[0]);
+            std::process::exit(1);
+        }
+        Err(ParseError::InvalidThreshold(arg)) => {
+            eprintln!("Invalid error threhold: {}", arg.red());
+            usage(&args[0]);
+            std::process::exit(1);
+        }
+        Err(ParseError::InvalidSeed(arg)) => {
+            eprintln!("Invalid seed: {}", arg.red());
+            usage(&args[0]);
+            std::process::exit(1);
+        }
+        Err(ParseError::InvalidArgument(arg)) => {
+            eprintln!("Unexpected argument: {}", arg.red());
+            usage(&args[0]);
+            std::process::exit(1);
+        }
+    };
+
+    let n = run_opts.n;
+    let iter = run_opts.iter;
+    let thresh = run_opts.thresh;
+    let verbose = run_opts.verbose;
+    let mut r = match run_opts.r {
+        Some(rng) => rng,
+        None => {
+            println!("Using random seed");
+            rand::SeedableRng::from_entropy()
+        }
+    };
 
     println!("Particle Swarm Optimization Demo");
     println!("Function to optimize: y = (x - 1)^2");
@@ -133,23 +276,34 @@ fn main() {
     let f = |x: f64| (x - 1.0) * (x - 1.0);
     let opt = OptimizationPolicy::FindMinimum;
     let consts = UpdatePolicy::new(0.5, 0.5);
-    let mut swarm = ParticleSwarm::new_random(n, f, &opt);
+    let mut swarm = ParticleSwarm::new_random(n, f, &opt, &mut r);
 
-    println!("Initialized {} particles:", n);
-    // for i in 0..n {
-    //     println!(
-    //         "Particle {}: x = {}, y = {}",
-    //         i,
-    //         swarm.position[i],
-    //         f(swarm.position[i])
-    //     );
-    // }
-    // println!("{:#?}", swarm);
-
-    for i in 0..iter {
-        update(&mut swarm, &consts, f, &opt);
-        // println!("Iteration {}: {:#?}", i, swarm);
-        // println!("y = {}", f(swarm.global_optimum.unwrap()));
+    println!("\nInitialized {} particles:", n);
+    if verbose {
+        println!("{}\n", swarm);
+    }
+    match iter {
+        Some(i) => {
+            for _ in 1..i+1 {
+                update(&mut swarm, &consts, f, &opt, &mut r);
+                if verbose {
+                    println!("Iteration {}", i);
+                    println!("{}\n", swarm);
+                }
+            }
+        }
+        None => {
+            let mut i = 1;
+            while f(swarm.global_optimum.unwrap()) > thresh {
+                update(&mut swarm, &consts, f, &opt, &mut r);
+                if verbose {
+                    println!("Iteration {}", i);
+                    println!("{}\n", swarm);
+                }
+                i += 1;
+            }
+            println!("Finished in {} iterations", i);
+        }
     }
 
     println!("Best value of x: {}", swarm.global_optimum.unwrap());
